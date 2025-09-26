@@ -1,0 +1,321 @@
+<!--
+  ~ Copyright (c) 2025.
+  ~ Author: Elias Arnold licence@eliasarnold.com
+  ~ You should have received a copy of the licence with this file. If not please contact the Author.
+  -->
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8"/>
+    <meta
+            name="viewport"
+            content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>Pop Art Voice Notes</title>
+
+    <!-- TailwindCSS via CDN -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss-browser/4.1.13/index.global.min.js" integrity="sha512-TscjjxDy2iXx5s55Ar78c01JDHUug0K5aw4YKId9Yuocjx3ueX/X9PFyH5XNRVWqagx3TtcQWQVBaHAIPFjiFA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js" integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="main.js"></script>
+    <!-- Pop-artish headline font (optional, purely CSS/HTML phase) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com"/>
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+    <link
+            href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;600&display=swap"
+            rel="stylesheet"
+    />
+
+
+    <style>
+        :root {
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+            --safe-top: env(safe-area-inset-top, 0px);
+        }
+
+        /* Pop-art halftone background */
+        .halftone-bg {
+            background: radial-gradient(circle at 1.25rem 1.25rem, rgba(255, 255, 255, 0.15) 2px, transparent 3px) 0 0 / 20px 20px,
+            radial-gradient(circle at 0.25rem 0.25rem, rgba(0, 0, 0, 0.05) 2px, transparent 3px) 0 0 / 20px 20px,
+            linear-gradient(180deg, #fff1f2 0%, #ffe4e6 30%, #fde68a 55%, #a7f3d0 80%, #bfdbfe 100%);
+        }
+
+        /* Comic panel feel */
+        .panel {
+            box-shadow: 0 4px 0 0 #000,
+            0 8px 0 0 rgba(0, 0, 0, 0.5);
+            border: 4px solid #000;
+        }
+
+        /* Big FAB pulse for "recording" (we'll toggle via JS) */
+        @keyframes throb {
+            0% {
+                /* keep position stable; do not scale to avoid jump */
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.35);
+            }
+            70% {
+                box-shadow: 0 0 0 24px rgba(239, 68, 68, 0);
+            }
+            100% {
+                box-shadow: 0 0 0 0 rgba(239, 68, 68, 0);
+            }
+        }
+
+        .recording {
+            animation: throb 1.6s ease-in-out infinite;
+        }
+
+        /* (optional) softer halo to separate the FAB from the edge */
+        #mainButton::after {
+            content: "";
+            position: absolute;
+            inset: -10px;
+            border-radius: 9999px;
+            background: radial-gradient(circle, rgba(0, 0, 0, .15), transparent 60%);
+            z-index: -1;
+        }
+        /* Keep the icon from shifting when toggling */
+        #mainButton { position: relative; }
+        #mainButton svg {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            transform: translate(-50%, -50%);
+        }
+
+        /* 5-minute progress animation (JS can add/remove this class) */
+        @keyframes progress-5m {
+            0% {
+                width: 0%;
+            }
+            100% {
+                width: 100%;
+            }
+        }
+
+        .animate-progress-5m {
+            animation: progress-5m 300s linear infinite;
+        }
+
+        /* Spinner used while "transcribing" (toggle visibility via JS) */
+        .spinner {
+            border: 4px solid rgba(0, 0, 0, 0.1);
+            border-top: 4px solid #000;
+            border-radius: 9999px;
+            width: 32px;
+            height: 32px;
+        }
+
+        /* Bottom safe-area padding for floating controls */
+        .bottom-safe {
+            padding-bottom: calc(var(--safe-bottom) + 0.75rem);
+        }
+
+        /* Headline font */
+        .font-pop {
+            font-family: 'Bangers', system-ui, -apple-system, Segoe UI, Roboto, Inter, Arial, sans-serif;
+            letter-spacing: 0.5px;
+        }
+
+        /* Hide via utility (JS will toggle) */
+        .hidden-important {
+            display: none !important;
+        }
+
+        /* Editable transcript caret/selection clarity on bright backgrounds */
+        #transcriptArea:focus {
+            outline: none;
+        }
+
+        #transcriptArea::selection {
+            background: rgba(59, 130, 246, .25);
+        }
+
+        /* Settings sheet backdrop blur */
+        .backdrop {
+            backdrop-filter: blur(4px);
+        }
+
+        /* --- bottom safety + positioning helpers --- */
+        .content-safe-pad { /* space so content never hides behind the FAB */
+            padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 9rem);
+        }
+
+        .fab-bottom { /* exact FAB offset from the bottom edge */
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 1.25rem);
+        }
+
+        .action-bottom { /* smaller buttons offset */
+            bottom: calc(env(safe-area-inset-bottom, 0px) + 0.9rem);
+        }
+
+        /* (optional) softer halo to separate the FAB from the edge */
+        #mainButton::after {
+            content: "";
+            position: absolute;
+            inset: -10px;
+            border-radius: 9999px;
+            background: radial-gradient(circle, rgba(0, 0, 0, .15), transparent 60%);
+            z-index: -1;
+        }
+
+    </style>
+</head>
+<body class="halftone-bg min-h-dvh flex flex-col text-neutral-900">
+
+<!-- Top bar: Settings (smallest of the 3) -->
+<header class="relative pt-3" style="padding-top: calc(var(--safe-top) + 0.5rem);">
+    <button
+            id="settingsButton"
+            aria-label="Settings"
+            class="absolute left-3 top-3 z-30 panel bg-yellow-300 hover:bg-yellow-200 active:translate-y-0.5 transition-transform duration-100 rounded-full p-2 h-10 w-10 flex items-center justify-center"
+    >
+        <!-- Placeholder settings SVG; replace later -->
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/>
+            <path d="M19.4 13a7.7 7.7 0 0 0 .06-.99c0-.34-.02-.67-.06-1l2.11-1.65a.6.6 0 0 0 .14-.76l-2-3.46a.6.6 0 0 0-.72-.27l-2.49 1a7.78 7.78 0 0 0-1.73-1L14.4 1.8a.6.6 0 0 0-.59-.48h-3.64a.6.6 0 0 0-.58.48L8.77 4.87c-.6.23-1.18.53-1.72.9l-2.5-1a.6.6 0 0 0-.72.27l-2 3.46a.6.6 0 0 0 .14.76L4.07 11a8.6 8.6 0 0 0-.06 1c0 .34.02.67.06 1l-2.1 1.65a.6.6 0 0 0-.15.76l2 3.46a.6.6 0 0 0 .72.27l2.5-1c.54.37 1.12.67 1.72.9l.82 3.07c.07.28.32.48.6.48h3.64c.28 0 .52-.2.59-.48l.82-3.07c.6-.23 1.18-.53 1.73-.9l2.5 1a.6.6 0 0 0 .72-.27l2-3.46a.6.6 0 0 0-.14-.76L19.4 13Z"/>
+        </svg>
+    </button>
+
+    <h1 class="text-center font-pop text-3xl md:text-4xl drop-shadow-sm pt-1 select-none">
+        POW! Voice Notes
+    </h1>
+</header>
+
+<!-- Settings Sheet (hidden by default) -->
+<div
+        id="settingsSheet"
+        class="hidden-important fixed inset-0 z-40 flex items-end sm:items-center justify-center p-4 backdrop"
+        aria-hidden="true"
+>
+    <div class="panel bg-white w-full max-w-md rounded-3xl overflow-hidden">
+        <div class="bg-black text-white px-4 py-3 flex items-center gap-2">
+            <span class="font-pop text-2xl">Settings</span>
+        </div>
+
+        <div class="p-4 space-y-3">
+            <label for="apiKeyInput" class="block font-semibold">OpenAI API Key</label>
+            <input
+                    id="apiKeyInput"
+                    type="password"
+                    placeholder="sk-..."
+                    class="w-full panel rounded-xl px-4 py-3 bg-yellow-50 focus:bg-white focus:ring-2 focus:ring-blue-500"
+                    autocomplete="off"
+            />
+
+            <div class="flex gap-2 pt-1">
+                <button
+                        id="saveApiKeyButton"
+                        class="panel bg-green-300 hover:bg-green-200 rounded-xl px-4 py-2 font-semibold"
+                >
+                    Save
+                </button>
+                <button
+                        id="closeSettingsButton"
+                        class="panel bg-neutral-200 hover:bg-neutral-100 rounded-xl px-4 py-2"
+                >
+                    Close
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Main content: Editable transcript panel -->
+<main class="flex-1 px-4 content-safe-pad pt-4 md:px-6">
+    <div
+            id="transcriptPanel"
+            class="panel rounded-3xl bg-white/90"
+    >
+        <div class="bg-black text-white px-4 py-2 rounded-t-[1.4rem]">
+            <div class="flex items-center justify-between">
+                <span class="font-pop text-xl">Transcript</span>
+                <span id="timerLabel" class="text-xs opacity-80">00:00</span>
+            </div>
+        </div>
+
+        <div
+                id="transcriptArea"
+                class="min-h-[40dvh] max-h-[62dvh] overflow-y-auto p-4 leading-relaxed"
+                contenteditable="true"
+                role="textbox"
+                aria-multiline="true"
+                spellcheck="true"
+                data-js-hook="transcript"
+                placeholder="Start recording to see text flow in. Edit freely…"
+        ></div>
+    </div>
+
+    <!-- Progress zone -->
+    <section class="mt-4" aria-live="polite">
+        <!-- Progress bar (visible during recording unless spinner shown) -->
+        <div id="progressContainer" class="panel rounded-full bg-white overflow-hidden">
+            <div class="h-3 w-full bg-gradient-to-r from-blue-500 via-cyan-400 via-emerald-400 via-amber-400 to-red-500 relative">
+                <div
+                        id="progressBar"
+                        class="h-3 panel border-0 rounded-r-full bg-transparent animate-progress-5m"
+                        style="background: transparent;"
+                >
+                    <!-- The fill element below is the actual moving width -->
+                    <div
+                            id="progressFill"
+                            class="h-full rounded-r-full"
+                            style="background: linear-gradient(90deg, #3b82f6 0%, #06b6d4 20%, #10b981 40%, #f59e0b 70%, #ef4444 100%); width: 0%;"
+                    ></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Spinner (hidden while progress is visible) -->
+        <div id="spinnerRow" class="hidden-important flex items-center gap-3 mt-3">
+            <div class="spinner animate-spin"></div>
+            <div class="font-semibold">Transcribing…</div>
+        </div>
+    </section>
+</main>
+
+<!-- Floating actions (bottom center & bottom right) -->
+<div class="pointer-events-none fixed inset-x-0 bottom-0 z-30 bottom-safe">
+    <div class="relative mx-auto max-w-xl px-4 md:px-6">
+        <!-- Main Record/Pause FAB (centered) -->
+        <button
+                id="mainButton"
+                class="pointer-events-auto cursor-pointer panel recording bg-gradient-to-tr from-rose-500 via-fuchsia-500 to-amber-400 text-white rounded-full h-20 w-20 md:h-24 md:w-24 flex items-center justify-center absolute left-1/2 -translate-x-1/2 fab-bottom"
+                aria-label="Record"
+                data-state="recording"
+        >
+            <!-- Replace these SVGs later; JS will toggle hidden -->
+            <svg id="icon-record" class="h-9 w-9 drop-shadow-sm" viewBox="0 0 24 24" fill="currentColor"
+                 aria-hidden="true">
+                <path fill-rule="evenodd"
+                      d="M4.5 7.5a3 3 0 0 1 3-3h9a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3v-9Z"
+                      clip-rule="evenodd"/>
+            </svg>
+
+
+            <svg id="icon-pause" class="h-9 w-9 hidden" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path fill-rule="evenodd"
+                      d="M4.5 5.653c0-1.427 1.529-2.33 2.779-1.643l11.54 6.347c1.295.712 1.295 2.573 0 3.286L7.28 19.99c-1.25.687-2.779-.217-2.779-1.643V5.653Z"
+                      clip-rule="evenodd"/>
+            </svg>
+            <span class="sr-only">Recording</span>
+        </button>
+
+        <!-- Copy button (bottom-right, smaller than main) -->
+        <button
+                id="copyButton"
+                class="pointer-events-auto cursor-pointer panel bg-cyan-300 hover:bg-cyan-200 text-black rounded-full h-14 w-14 flex items-center justify-center absolute right-2 action-bottom"
+                aria-label="Copy transcript"
+        >
+            <!-- Placeholder copy SVG -->
+            <svg class="h-6 w-6" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                <path d="M16 1H6a2 2 0 0 0-2 2v12h2V3h10V1Zm3 4H10a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2Zm0 16H10V7h9v14Z"/>
+            </svg>
+        </button>
+    </div>
+</div>
+
+<!-- Accessibility helpers -->
+<div class="sr-only" aria-live="polite" id="liveRegion"></div>
+</body>
+</html>
