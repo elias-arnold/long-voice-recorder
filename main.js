@@ -2,7 +2,7 @@
     'use strict';
 
     // ---- Config you can tweak -----------------------------------------------
-    const PROGRESS_TOTAL_MS = 0.5 * 60 * 1000;    // 5 minutes
+    const PROGRESS_TOTAL_MS = 0.5 * 60 * 1000;    // 30 seconds
     const FRESH_MS = 10_000;                    // highlight new text for 10s
     const SIMULATE_TRANSCRIBE = false;          // set false when wired to backend
     const SIM_TRANSCRIBE_MS = 3_000;            // spinner time during simulation
