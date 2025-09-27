@@ -1,14 +1,15 @@
+// main.js
 (function (window, $) {
     'use strict';
 
     // ---- Configuration --------------------------------------------------------
     // Duration of one "progress cycle" before forcing a recorder rotation.
-    // Note: UI animations can be longer/shorter, but this governs when a proper,
-    // closed audio container is formed and sent for transcription.
+    // UI animations can differ, but this governs when a finalized audio container is produced.
     let PROGRESS_DURATION_MS = 30 * 1000;      // 30 seconds
-    const FRESH_MS = 10_000;                     // highlight new text for 10 seconds
-    const LS_KEY = 'OPENAI_API_KEY';             // localStorage key for OpenAI API key
-    const LS_RUNTIME_KEY = 'REC_RUNTIME_MS';       // localStorage key for runtime (ms)
+    const FRESH_MS = 10_000;                   // highlight new text for 10 seconds
+    const COUNTDOWN_WINDOW_MS = 5_000;         // show countdown in last 5 seconds
+    const LS_KEY = 'OPENAI_API_KEY';           // localStorage key for OpenAI API key
+    const LS_RUNTIME_KEY = 'REC_RUNTIME_MS';   // localStorage key for runtime (ms)
 
     // ---- Runtime state --------------------------------------------------------
     const state = {
@@ -31,7 +32,15 @@
         chunkStartTs: null,
 
         // Spinner concurrency (can have multiple in-flight transcriptions)
-        pendingTranscribes: 0
+        pendingTranscribes: 0,
+
+        // Countdown bookkeeping
+        lastCountdownValue: null,
+
+        // Loop limit bookkeeping
+        loopCount: 0,
+        maxLoops: null
+
     };
 
     // ---- DOM cache ------------------------------------------------------------
@@ -58,11 +67,12 @@
         el.transcript = $('#transcriptArea');
         el.liveRegion = $('#liveRegion');
         el.timerLabel = $('#timerLabel');
+
+        el.rotationCountdown = $('#rotationCountdown');
     }
 
     // ---- Small utilities ------------------------------------------------------
     function fmtMMSS(ms) {
-        // Formats a given time in milliseconds into a MM:SS string representation.
         const t = Math.floor(ms / 1000);
         const m = String(Math.floor(t / 60)).padStart(2, '0');
         const s = String(t % 60).padStart(2, '0');
@@ -70,12 +80,10 @@
     }
 
     function announce(msg) {
-        // Updates an aria-live region so screen readers inform the user.
         el.liveRegion.text(msg);
     }
 
     function placeCaretAtEnd(node) {
-        // Ensures caret stays at the end of the contenteditable transcript box.
         try {
             node = node[0] || node; // allow jQuery or DOM node
             node.focus();
@@ -101,17 +109,18 @@
         // Swap icons
         el.iconRecord.toggleClass('hidden', recording);
         el.iconPause.toggleClass('hidden', !recording);
+
+        // Hide countdown when pausing
+        if (!recording) hideCountdown();
     }
 
     function showSpinner(show) {
-        // Mutually exclusive visibility: while spinner is shown, progress bar is hidden.
         el.spinnerRow.toggleClass('hidden-important', !show);
         el.progressContainer.toggleClass('hidden-important', show);
         state.isTranscribing = !!show;
     }
 
     function incPendingTranscribes() {
-        // Keep spinner visible while any transcription calls are in-flight.
         state.pendingTranscribes += 1;
         el.spinnerRow.removeClass('hidden-important');
         el.progressContainer.addClass('hidden-important');
@@ -127,9 +136,35 @@
         }
     }
 
+    // ---- Countdown overlay ----------------------------------------------------
+    function updateCountdown(remainingMs) {
+        // Only show in the last 5 seconds while actively recording
+        if (!state.isRecording || remainingMs <= 0 || remainingMs > COUNTDOWN_WINDOW_MS) {
+            hideCountdown();
+            return;
+        }
+        const val = Math.max(1, Math.ceil(remainingMs / 1000)); // 5..1
+        if (state.lastCountdownValue !== val) {
+            state.lastCountdownValue = val;
+            el.rotationCountdown.text(String(val));
+            // trigger a quick "pop" animation
+            el.rotationCountdown.removeClass('pop');
+            // force reflow to restart animation
+            void el.rotationCountdown[0].offsetWidth;
+            el.rotationCountdown.addClass('pop');
+        }
+        el.rotationCountdown.removeClass('hidden-important').attr('aria-hidden', 'false');
+    }
+
+    function hideCountdown() {
+        state.lastCountdownValue = null;
+        if (el.rotationCountdown) {
+            el.rotationCountdown.addClass('hidden-important').attr('aria-hidden', 'true');
+        }
+    }
+
     // ---- Progress cycle (rotates the recorder periodically) -------------------
     function startProgressCycle() {
-        // Resets the "run" start time and kicks a periodic update.
         state.cycleStartTs = performance.now();
         stopProgressTick();
         state.progressTick = setInterval(onProgressTick, 100); // ~10 FPS
@@ -153,26 +188,60 @@
         const pct = Math.min(1, totalElapsed / PROGRESS_DURATION_MS);
         el.progressFill.css('width', (pct * 100).toFixed(3) + '%');
 
+        // Update top-right countdown for last 5 seconds
+        const remaining = PROGRESS_DURATION_MS - totalElapsed;
+        updateCountdown(remaining);
+
         if (pct >= 1) {
             // One cycle elapsed: close current container and immediately continue recording.
             state.progressAccumMs = 0;
             state.cycleStartTs = performance.now();
             resetProgressFill();
+            hideCountdown();
+
+            // Loop limiting: stop after reaching the configured number of loops
+            if (state.maxLoops != null) {
+                state.loopCount = (state.loopCount || 0) + 1;
+                if (state.loopCount >= state.maxLoops) {
+                    // Finalize current audio and stop recording entirely
+                    rotateRecorder('cycle-final', /* continueAfter */ false);
+                    pauseProgress();
+                    void setRecording(false);
+                    // Reset loop limiter
+                    state.maxLoops = null;
+                    state.loopCount = 0;
+                    return;
+                }
+            }
+
             rotateRecorder('cycle', /* continueAfter */ true);
         }
     }
 
+    // Public helper: stop after N loops (use N=5 for the requested behavior)
+    function stopAfterNLoops(n) {
+        const num = Math.max(1, Math.floor(n || 1));
+        state.loopCount = 0;
+        state.maxLoops = num;
+        announce(`Will stop after ${num} loop${num === 1 ? '' : 's'}.`);
+    }
+
+    // Convenience function specifically for 5 loops
+    function stopAfterFiveLoops() {
+        stopAfterNLoops(5);
+    }
+
+
     function pauseProgress() {
-        // Accumulates elapsed time within the current cycle and halts updates.
         const now = performance.now();
         if (state.cycleStartTs != null) {
             state.progressAccumMs += Math.max(0, now - state.cycleStartTs);
         }
         stopProgressTick();
+        hideCountdown();
     }
 
     function resumeProgress() {
-        // Resumes the cycle updates without resetting the accumulated progress.
         state.cycleStartTs = performance.now();
         if (!state.progressTick) {
             state.progressTick = setInterval(onProgressTick, 100);
@@ -181,7 +250,6 @@
 
     // ---- Timer label (mm:ss) --------------------------------------------------
     function startTimer() {
-        // Starts the user-visible elapsed timer. Resumes from current accum.
         stopTimer();
         state.timerTick = setInterval(() => {
             if (!state.isRecording) return;
@@ -197,7 +265,6 @@
 
     // ---- Transcript helpers ---------------------------------------------------
     function appendTranscript(text) {
-        // Appends new text, briefly highlighted, keeps scroll and caret at the end.
         const span = $('<span>')
             .addClass('fresh bg-yellow-100 text-rose-600')
             .text(text);
@@ -209,11 +276,9 @@
 
         el.transcript.append(span);
 
-        // Keep view scrolled to bottom & caret at end
         el.transcript.scrollTop(el.transcript[0].scrollHeight);
         placeCaretAtEnd(el.transcript);
 
-        // Remove the highlight after FRESH_MS
         setTimeout(() => {
             span.removeClass('bg-yellow-100 text-rose-600');
         }, FRESH_MS);
@@ -225,7 +290,6 @@
         el.apiKeyInput.val(existing);
         const rt = localStorage.getItem(LS_RUNTIME_KEY) || String(PROGRESS_DURATION_MS);
         if (el.runtimeSelect && el.runtimeSelect.length) {
-            // Ensure one of the valid values is selected; default to current in-memory value
             const valid = ['30000', '60000', '180000', '300000'];
             el.runtimeSelect.val(valid.includes(rt) ? rt : String(PROGRESS_DURATION_MS));
         }
@@ -237,7 +301,6 @@
     }
 
     function applyProgressAnimationDuration() {
-        // Reflect the runtime setting into the CSS animation duration.
         try {
             if (el.progressBar && el.progressBar.length) {
                 el.progressBar[0].style.setProperty('--progress-duration', PROGRESS_DURATION_MS + 'ms');
@@ -250,13 +313,11 @@
         const val = (el.apiKeyInput.val() || '').trim();
         try {
             localStorage.setItem(LS_KEY, val);
-            // Save runtime setting
             if (el.runtimeSelect && el.runtimeSelect.length) {
                 const sel = String(el.runtimeSelect.val() || '');
                 const valid = ['30000', '60000', '180000', '300000'];
                 const toStore = valid.includes(sel) ? sel : '30000';
                 localStorage.setItem(LS_RUNTIME_KEY, toStore);
-                // Apply immediately to the in-memory duration
                 PROGRESS_DURATION_MS = parseInt(toStore, 10) || 30000;
                 applyProgressAnimationDuration();
             }
@@ -268,10 +329,8 @@
         }
     }
 
-
     // ---- Copy transcript ------------------------------------------------------
     async function copyTranscript() {
-        // Attempts secure clipboard API first; falls back to execCommand for HTTP.
         const text = el.transcript.text();
         try {
             if (navigator.clipboard && window.isSecureContext) {
@@ -291,13 +350,12 @@
 
     // ---- Media: microphone + MediaRecorder -----------------------------------
     function getSupportedMimeType() {
-        // Returns the first supported audio container/codec combination.
         const candidates = [
             'audio/webm;codecs=opus',
             'audio/webm',
             'audio/ogg;codecs=opus',
             'audio/ogg',
-            'audio/mp4' // sometimes Safari supports MPEG-4 AAC (container m4a)
+            'audio/mp4'
         ];
         for (const type of candidates) {
             if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)) return type;
@@ -306,7 +364,6 @@
     }
 
     async function initMic() {
-        // Requests mic permission and primes the recording stream.
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             announce('Microphone not supported in this browser.');
             console.error('getUserMedia not supported');
@@ -324,7 +381,6 @@
     }
 
     function startRecorder(stream) {
-        // Starts a MediaRecorder with small time slices so dataavailable fires regularly.
         const mimeType = getSupportedMimeType();
         const mr = new MediaRecorder(stream, mimeType ? {mimeType} : undefined);
         state.mediaRecorder = mr;
@@ -338,7 +394,6 @@
         });
 
         mr.addEventListener('stop', () => {
-            // On stop we finalize the container from the collected parts and dispatch it.
             try {
                 if (state.chunkParts.length > 0) {
                     const type = mr.mimeType || 'audio/webm';
@@ -351,10 +406,8 @@
                     const fileName = `voice-${ts}.${ext}`;
                     const file = new File([blob], fileName, {type, lastModified: Date.now()});
 
-                    // Reset for next session
                     state.chunkParts = [];
 
-                    // Fire-and-forget transcription
                     void sendForTranscription(file);
                 }
             } catch (e) {
@@ -367,8 +420,6 @@
     }
 
     function rotateRecorder(reason, continueAfter) {
-        // Gracefully stops and (optionally) restarts the MediaRecorder to ensure
-        // we produce a finalized audio container usable by transcription services.
         try {
             if (!state.mediaRecorder) return;
 
@@ -378,16 +429,13 @@
             state.mediaRecorder.addEventListener('stop', function restartOnce() {
                 state.mediaRecorder.removeEventListener('stop', restartOnce);
                 if (shouldRestart && state.isRecording && stream) {
-                    // Slight delay avoids InvalidStateError on some browsers
                     setTimeout(() => startRecorder(stream), 1);
                 }
             }, {once: true});
 
-            // Request the last buffered data chunk before stopping
             try {
                 state.mediaRecorder.requestData();
-            } catch (_) {
-            }
+            } catch (_) {}
             state.mediaRecorder.stop();
         } catch (e) {
             console.warn('rotateRecorder failed:', e);
@@ -395,7 +443,6 @@
     }
 
     async function sendForTranscription(file) {
-        // Sends the audio file to the transcription API and appends resulting text.
         try {
             incPendingTranscribes();
 
@@ -414,7 +461,6 @@
                 method: 'POST',
                 headers: {
                     Authorization: `Bearer ${apiKey}`
-                    // Important: do not set Content-Type when sending FormData.
                 },
                 body: formData
             });
@@ -447,12 +493,10 @@
 
     // ---- Public API (for external orchestration if needed) --------------------
     function startTranscribe() {
-        // Shows the spinner and hides progress while an external transcription runs.
         showSpinner(true);
     }
 
     function finishTranscribe() {
-        // Hides the spinner, restores progress UI, and ensures progress continues if recording.
         showSpinner(false);
         resetProgressFill();
         if (state.isRecording) startProgressCycle();
@@ -466,7 +510,6 @@
             // Transition: paused -> recording
             setRecordingUI(true);
 
-            // Ensure we have mic permission and a stream, then start/continue the recorder
             if (!state.mediaStream) {
                 await initMic(); // starts recorder on success
             } else if (!state.mediaRecorder || state.mediaRecorder.state === 'inactive') {
@@ -479,7 +522,6 @@
                 }
             }
 
-            // Start/resume UI cycles
             resumeProgress();
             startTimer();
         } else {
@@ -505,7 +547,6 @@
     function bindEvents() {
         // Main Record/Pause FAB
         el.mainBtn.on('click', () => {
-            // Fire-and-forget async toggling (no need to await)
             void setRecording(!state.isRecording);
         });
 
@@ -528,8 +569,7 @@
                 if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
                     state.mediaRecorder.stop();
                 }
-            } catch (_) {
-            }
+            } catch (_) {}
         });
     }
 
@@ -547,8 +587,7 @@
                     PROGRESS_DURATION_MS = ms;
                 }
             }
-        } catch (_) {
-        }
+        } catch (_) {}
 
         // Ensure the CSS animation duration matches the runtime setting
         applyProgressAnimationDuration();
@@ -564,10 +603,12 @@
             appendTranscript,   // App.appendTranscript("new words...")
             startTranscribe,    // App.startTranscribe()
             finishTranscribe,   // App.finishTranscribe()
-            setRecording        // App.setRecording(true/false) — returns a Promise
+            setRecording,       // App.setRecording(true/false) — returns a Promise
+            stopAfterNLoops,    // App.stopAfterNLoops(n)
+            stopAfterFiveLoops  // App.stopAfterFiveLoops()
         });
-    }
 
+    }
 
     $(init);
 })(window, jQuery);
