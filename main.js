@@ -159,7 +159,7 @@
                 state.mediaRecorder.removeEventListener('stop', restartOnce);
                 if (shouldRestart && state.isRecording && stream) {
                     // Small delay to avoid "Invalid state" on immediate restart in some browsers
-                    setTimeout(() => startRecorder(stream), 10);
+                    setTimeout(() => startRecorder(stream), 1);
                 }
             }, { once: true });
 
@@ -526,6 +526,7 @@
             setRecording        // App.setRecording(true/false)
         });
 
+        setRecording(false);
         // Example (remove later): demo new text every 4s while recording
         // to showcase the 10s color flash.
         // let demo = setInterval(() => {
