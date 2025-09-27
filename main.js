@@ -1,32 +1,39 @@
 (function (window, $) {
     'use strict';
 
-    // ---- Config you can tweak -----------------------------------------------
-    const PROGRESS_TOTAL_MS = 0.5 * 60 * 1000;    // 30 seconds
-    const FRESH_MS = 10_000;                    // highlight new text for 10s
-    const SIMULATE_TRANSCRIBE = false;          // set false when wired to backend
-    const SIM_TRANSCRIBE_MS = 3_000;            // spinner time during simulation
-    const LS_KEY = 'OPENAI_API_KEY';            // localStorage key name
+    // ---- Configuration --------------------------------------------------------
+    // Duration of one "progress cycle" before forcing a recorder rotation.
+    // Note: UI animations can be longer/shorter, but this governs when a proper,
+    // closed audio container is formed and sent for transcription.
+    const PROGRESS_DURATION_MS = 30 * 1000;      // 30 seconds
+    const FRESH_MS = 10_000;                     // highlight new text for 10 seconds
+    const LS_KEY = 'OPENAI_API_KEY';             // localStorage key for OpenAI API key
 
-    // ---- State ----------------------------------------------------------------
+    // ---- Runtime state --------------------------------------------------------
     const state = {
-        isRecording: true,
+        isRecording: false,        // starts paused for better UX/permissions
         isTranscribing: false,
-        progressAccumMs: 0,       // accumulated within current 5-min cycle
-        progressTick: null,       // setInterval handle
-        timerTick: null,          // setInterval handle for mm:ss
-        cycleStartTs: null,       // performance.now() when cycle (or resume) started
-        timerAccumMs: 0,          // total recording time for label
 
-        // Microphone/recording
+        // Progress cycle bookkeeping
+        progressAccumMs: 0,
+        progressTick: null,        // setInterval handle for progress bar updates
+        cycleStartTs: null,
+
+        // Timer (mm:ss) bookkeeping
+        timerTick: null,           // setInterval handle for timer label
+        timerAccumMs: 0,
+
+        // Media capture/recording
         mediaStream: null,
         mediaRecorder: null,
         chunkParts: [],
         chunkStartTs: null,
+
+        // Spinner concurrency (can have multiple in-flight transcriptions)
         pendingTranscribes: 0
     };
 
-    // ---- DOM ------------------------------------------------------------------
+    // ---- DOM cache ------------------------------------------------------------
     const el = {};
     function cacheDom() {
         el.mainBtn = $('#mainButton');
@@ -49,7 +56,7 @@
         el.timerLabel = $('#timerLabel');
     }
 
-    // ---- Utilities ------------------------------------------------------------
+    // ---- Small utilities ------------------------------------------------------
     function fmtMMSS(ms) {
         const t = Math.floor(ms / 1000);
         const m = String(Math.floor(t / 60)).padStart(2, '0');
@@ -58,43 +65,12 @@
     }
 
     function announce(msg) {
+        // Updates an aria-live region so screen readers inform the user.
         el.liveRegion.text(msg);
     }
 
-    function setRecordingUI(recording) {
-        state.isRecording = recording;
-        el.mainBtn.toggleClass('recording', recording);
-        el.mainBtn.attr('data-state', recording ? 'recording' : 'paused');
-        el.mainBtn.attr('aria-label', recording ? 'Pause' : 'Record');
-
-        // Show current state icon
-        el.iconRecord.toggleClass('hidden', !recording);
-        el.iconPause.toggleClass('hidden', recording);
-    }
-
-    function showSpinner(show) {
-        el.spinnerRow.toggleClass('hidden-important', !show);
-        el.progressContainer.toggleClass('hidden-important', show);
-        state.isTranscribing = !!show;
-    }
-
-    // Keep spinner in sync with multiple concurrent transcriptions
-    function incPendingTranscribes() {
-        state.pendingTranscribes += 1;
-        el.spinnerRow.removeClass('hidden-important');
-        el.progressContainer.addClass('hidden-important');
-        state.isTranscribing = true;
-    }
-    function decPendingTranscribes() {
-        state.pendingTranscribes = Math.max(0, state.pendingTranscribes - 1);
-        if (state.pendingTranscribes === 0) {
-            el.spinnerRow.addClass('hidden-important');
-            el.progressContainer.removeClass('hidden-important');
-            state.isTranscribing = false;
-        }
-    }
-
     function placeCaretAtEnd(node) {
+        // Ensures caret stays at the end of the contenteditable transcript box.
         try {
             node = node[0] || node; // allow jQuery or DOM node
             node.focus();
@@ -109,11 +85,49 @@
         }
     }
 
-    // ---- Progress cycle -------------------------------------------------------
+    // ---- UI state helpers -----------------------------------------------------
+    function setRecordingUI(recording) {
+        state.isRecording = recording;
+
+        el.mainBtn.toggleClass('recording', recording);
+        el.mainBtn.attr('data-state', recording ? 'recording' : 'paused');
+        el.mainBtn.attr('aria-label', recording ? 'Pause' : 'Record');
+
+        // Swap icons
+        el.iconRecord.toggleClass('hidden', recording);
+        el.iconPause.toggleClass('hidden', !recording);
+    }
+
+    function showSpinner(show) {
+        // Mutually exclusive visibility: while spinner is shown, progress bar is hidden.
+        el.spinnerRow.toggleClass('hidden-important', !show);
+        el.progressContainer.toggleClass('hidden-important', show);
+        state.isTranscribing = !!show;
+    }
+
+    function incPendingTranscribes() {
+        // Keep spinner visible while any transcription calls are in-flight.
+        state.pendingTranscribes += 1;
+        el.spinnerRow.removeClass('hidden-important');
+        el.progressContainer.addClass('hidden-important');
+        state.isTranscribing = true;
+    }
+
+    function decPendingTranscribes() {
+        state.pendingTranscribes = Math.max(0, state.pendingTranscribes - 1);
+        if (state.pendingTranscribes === 0) {
+            el.spinnerRow.addClass('hidden-important');
+            el.progressContainer.removeClass('hidden-important');
+            state.isTranscribing = false;
+        }
+    }
+
+    // ---- Progress cycle (rotates the recorder periodically) -------------------
     function startProgressCycle() {
+        // Resets the "run" start time and kicks a periodic update.
         state.cycleStartTs = performance.now();
         stopProgressTick();
-        state.progressTick = setInterval(onProgressTick, 100); // ~10fps
+        state.progressTick = setInterval(onProgressTick, 100); // ~10 FPS
     }
 
     function stopProgressTick() {
@@ -126,52 +140,25 @@
     }
 
     function onProgressTick() {
-        if (!state.isRecording || state.isTranscribing /* UI-only; recorder continues */) {
-            // Note: we keep MediaRecorder running even if spinner shows
-        }
-
+        // Recorder continues capturing; this only updates UI and triggers rotations.
         const now = performance.now();
         const elapsedThisRun = now - state.cycleStartTs;
         const totalElapsed = state.progressAccumMs + elapsedThisRun;
 
-        const pct = Math.min(1, totalElapsed / PROGRESS_TOTAL_MS);
+        const pct = Math.min(1, totalElapsed / PROGRESS_DURATION_MS);
         el.progressFill.css('width', (pct * 100).toFixed(3) + '%');
 
         if (pct >= 1) {
-            // One 5-min chunk ended: finalize current file and immediately continue
+            // One cycle elapsed: close current container and immediately continue recording.
             state.progressAccumMs = 0;
             state.cycleStartTs = performance.now();
             resetProgressFill();
-            rotateRecorder('timer', /* continueAfter */ true);
-        }
-    }
-
-    function rotateRecorder(reason, continueAfter) {
-        try {
-            if (!state.mediaRecorder) return;
-
-            // Stopping the recorder ensures a finalized container (fixes "file unsupported" issues)
-            const stream = state.mediaStream;
-            const shouldRestart = !!continueAfter;
-
-            // On stop handler will package and send the file; restart after a short tick to allow stop to flush
-            state.mediaRecorder.addEventListener('stop', function restartOnce() {
-                state.mediaRecorder.removeEventListener('stop', restartOnce);
-                if (shouldRestart && state.isRecording && stream) {
-                    // Small delay to avoid "Invalid state" on immediate restart in some browsers
-                    setTimeout(() => startRecorder(stream), 1);
-                }
-            }, { once: true });
-
-            // Request the last buffered data slice before stopping
-            try { state.mediaRecorder.requestData(); } catch (_) {}
-            state.mediaRecorder.stop();
-        } catch (e) {
-            console.warn('rotateRecorder failed:', e);
+            rotateRecorder('cycle', /* continueAfter */ true);
         }
     }
 
     function pauseProgress() {
+        // Accumulates elapsed time within the current cycle and halts updates.
         const now = performance.now();
         if (state.cycleStartTs != null) {
             state.progressAccumMs += Math.max(0, now - state.cycleStartTs);
@@ -180,6 +167,7 @@
     }
 
     function resumeProgress() {
+        // Resumes the cycle updates without resetting the accumulated progress.
         state.cycleStartTs = performance.now();
         if (!state.progressTick) {
             state.progressTick = setInterval(onProgressTick, 100);
@@ -188,6 +176,7 @@
 
     // ---- Timer label (mm:ss) --------------------------------------------------
     function startTimer() {
+        // Starts the user-visible elapsed timer. Resumes from current accum.
         stopTimer();
         state.timerTick = setInterval(() => {
             if (!state.isRecording) return;
@@ -195,6 +184,7 @@
             el.timerLabel.text(fmtMMSS(state.timerAccumMs));
         }, 1000);
     }
+
     function stopTimer() {
         if (state.timerTick) clearInterval(state.timerTick);
         state.timerTick = null;
@@ -202,12 +192,11 @@
 
     // ---- Transcript helpers ---------------------------------------------------
     function appendTranscript(text) {
-        // Wrap new content to highlight for 10s
+        // Appends new text, briefly highlighted, keeps scroll and caret at the end.
         const span = $('<span>')
             .addClass('fresh bg-yellow-100 text-rose-600')
             .text(text);
 
-        // Add a space if needed
         const needsSpace =
             el.transcript.text().length > 0 &&
             !/[\s\n]$/.test(el.transcript.text());
@@ -219,7 +208,7 @@
         el.transcript.scrollTop(el.transcript[0].scrollHeight);
         placeCaretAtEnd(el.transcript);
 
-        // Remove the highlight after 10 seconds
+        // Remove the highlight after FRESH_MS
         setTimeout(() => {
             span.removeClass('bg-yellow-100 text-rose-600');
         }, FRESH_MS);
@@ -231,9 +220,11 @@
         el.apiKeyInput.val(existing);
         el.settingsSheet.removeClass('hidden-important').attr('aria-hidden', 'false');
     }
+
     function closeSettings() {
         el.settingsSheet.addClass('hidden-important').attr('aria-hidden', 'true');
     }
+
     function saveApiKey() {
         const val = (el.apiKeyInput.val() || '').trim();
         try {
@@ -248,12 +239,12 @@
 
     // ---- Copy transcript ------------------------------------------------------
     async function copyTranscript() {
+        // Attempts secure clipboard API first; falls back to execCommand for HTTP.
         const text = el.transcript.text();
         try {
             if (navigator.clipboard && window.isSecureContext) {
                 await navigator.clipboard.writeText(text);
             } else {
-                // Fallback for non-secure contexts
                 const ta = $('<textarea>').val(text).appendTo('body').css({ position: 'fixed', top: '-1000px' });
                 ta[0].select();
                 document.execCommand('copy');
@@ -266,14 +257,15 @@
         }
     }
 
-    // ---- Microphone + MediaRecorder ------------------------------------------
+    // ---- Media: microphone + MediaRecorder -----------------------------------
     function getSupportedMimeType() {
+        // Returns the first supported audio container/codec combination.
         const candidates = [
             'audio/webm;codecs=opus',
             'audio/webm',
             'audio/ogg;codecs=opus',
             'audio/ogg',
-            'audio/mp4' // fallback for Safari (if supported)
+            'audio/mp4' // sometimes Safari supports MPEG-4 AAC (container m4a)
         ];
         for (const type of candidates) {
             if (MediaRecorder.isTypeSupported && MediaRecorder.isTypeSupported(type)) return type;
@@ -282,6 +274,7 @@
     }
 
     async function initMic() {
+        // Requests mic permission and primes the recording stream.
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             announce('Microphone not supported in this browser.');
             console.error('getUserMedia not supported');
@@ -291,10 +284,6 @@
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
             state.mediaStream = stream;
             startRecorder(stream);
-            // Stop the demo generator once the real mic is on
-            if (window.App && typeof window.App.disableDemo === 'function') {
-                window.App.disableDemo();
-            }
             announce('Microphone ready. Recording started.');
         } catch (e) {
             announce('Microphone permission denied or unavailable.');
@@ -302,8 +291,8 @@
         }
     }
 
-
     function startRecorder(stream) {
+        // Starts a MediaRecorder with small time slices so dataavailable fires regularly.
         const mimeType = getSupportedMimeType();
         const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
         state.mediaRecorder = mr;
@@ -317,7 +306,7 @@
         });
 
         mr.addEventListener('stop', () => {
-            // Build a finalized container from all parts collected since last start
+            // On stop we finalize the container from the collected parts and dispatch it.
             try {
                 if (state.chunkParts.length > 0) {
                     const type = mr.mimeType || 'audio/webm';
@@ -325,13 +314,15 @@
                     const ts = new Date().toISOString().replace(/[:.]/g, '-');
                     const ext =
                         type.includes('webm') ? 'webm' :
-                            type.includes('ogg') ? 'ogg' :
-                                type.includes('mp4') ? 'm4a' : 'webm';
-                    const fileName = `voice-${ts}.` + ext;
+                            type.includes('ogg')  ? 'ogg'  :
+                                type.includes('mp4')  ? 'm4a'  : 'webm';
+                    const fileName = `voice-${ts}.${ext}`;
                     const file = new File([blob], fileName, { type, lastModified: Date.now() });
-                    // Reset parts for next session
+
+                    // Reset for next session
                     state.chunkParts = [];
-                    // Send out for transcription
+
+                    // Fire-and-forget transcription
                     void sendForTranscription(file);
                 }
             } catch (e) {
@@ -339,41 +330,37 @@
             }
         });
 
-        // Use a small timeslice so dataavailable fires regularly
-        mr.start(1000); // 1s slices
+        // Use a small timeslice so dataavailable fires regularly (and to minimize loss on stop).
+        mr.start(1000); // 1 second slices
     }
 
-
-    function finalizeChunk(reason) {
+    function rotateRecorder(reason, continueAfter) {
+        // Gracefully stops and (optionally) restarts the MediaRecorder to ensure
+        // we produce a finalized audio container usable by transcription services.
         try {
-            if (!state.chunkParts.length) {
-                state.chunkStartTs = performance.now();
-                return;
-            }
-            const type = state.mediaRecorder && state.mediaRecorder.mimeType ? state.mediaRecorder.mimeType : 'audio/webm';
-            const blob = new Blob(state.chunkParts, { type });
-            const startedAt = state.chunkStartTs || performance.now();
-            const endedAt = performance.now();
-            const ts = new Date().toISOString().replace(/[:.]/g, '-');
-            const ext =
-                type.includes('webm') ? 'webm' :
-                    type.includes('ogg') ? 'ogg' :
-                        type.includes('mp4') ? 'm4a' : 'dat';
-            const fileName = `voice-${ts}-${reason}.${ext}`;
-            const file = new File([blob], fileName, { type, lastModified: Date.now() });
+            if (!state.mediaRecorder) return;
 
-            // Reset for next rolling chunk
-            state.chunkParts = [];
-            state.chunkStartTs = endedAt;
+            const stream = state.mediaStream;
+            const shouldRestart = !!continueAfter;
 
-            // Send for transcription (non-blocking)
-            void sendForTranscription(file);
+            state.mediaRecorder.addEventListener('stop', function restartOnce() {
+                state.mediaRecorder.removeEventListener('stop', restartOnce);
+                if (shouldRestart && state.isRecording && stream) {
+                    // Slight delay avoids InvalidStateError on some browsers
+                    setTimeout(() => startRecorder(stream), 1);
+                }
+            }, { once: true });
+
+            // Request the last buffered data chunk before stopping
+            try { state.mediaRecorder.requestData(); } catch (_) {}
+            state.mediaRecorder.stop();
         } catch (e) {
-            console.error('Failed to finalize chunk:', e);
+            console.warn('rotateRecorder failed:', e);
         }
     }
 
     async function sendForTranscription(file) {
+        // Sends the audio file to the transcription API and appends resulting text.
         try {
             incPendingTranscribes();
 
@@ -392,7 +379,7 @@
                 method: 'POST',
                 headers: {
                     Authorization: `Bearer ${apiKey}`
-                    // Do NOT set Content-Type; the browser will set the multipart boundary.
+                    // Important: do not set Content-Type when sending FormData.
                 },
                 body: formData
             });
@@ -404,8 +391,6 @@
                 return;
             }
 
-            // API returns JSON with `text` field for plain text responses.
-            // If your account returns verbose JSON, adapt parsing accordingly.
             const data = await res.json();
             const text =
                 (typeof data === 'object' && data && typeof data.text === 'string')
@@ -425,62 +410,67 @@
         }
     }
 
-    // ---- Public API -----------------------------------------------------------
+    // ---- Public API (for external orchestration if needed) --------------------
     function startTranscribe() {
+        // Shows the spinner and hides progress while an external transcription runs.
         showSpinner(true);
     }
+
     function finishTranscribe() {
+        // Hides the spinner, restores progress UI, and ensures progress continues if recording.
         showSpinner(false);
         resetProgressFill();
-        // Resume the next 5-min cycle immediately (unless paused)
-        if (state.isRecording) {
-            startProgressCycle();
-        }
+        if (state.isRecording) startProgressCycle();
     }
-    function setRecording(stateBool) {
+
+    // Toggle recording with proper recorder/timer/progress control and permissions.
+    async function setRecording(stateBool) {
         if (stateBool === state.isRecording) return;
+
         if (stateBool) {
-            // Resume
+            // Transition: paused -> recording
             setRecordingUI(true);
-            resumeProgress();
-            try {
-                if (state.mediaRecorder && state.mediaRecorder.state === 'paused') {
-                    state.mediaRecorder.resume();
-                } else if ((!state.mediaRecorder || state.mediaRecorder.state === 'inactive') && state.mediaStream) {
-                    // If there is no active recorder, start a fresh one
-                    startRecorder(state.mediaStream);
-                }
-            } catch (e) {
-                console.warn('Resume recorder failed:', e);
+
+            // Ensure we have mic permission and a stream, then start/continue the recorder
+            if (!state.mediaStream) {
+                await initMic(); // starts recorder on success
+            } else if (!state.mediaRecorder || state.mediaRecorder.state === 'inactive') {
+                startRecorder(state.mediaStream);
+            } else if (state.mediaRecorder.state === 'paused') {
+                try { state.mediaRecorder.resume(); } catch (e) { console.warn('Resume failed:', e); }
             }
+
+            // Start/resume UI cycles
+            resumeProgress();
+            startTimer();
         } else {
-            // Pause -> finalize current chunk for transcription and reset timer
+            // Transition: recording -> paused
             setRecordingUI(false);
 
-            // Finalize a proper, closed audio container and do NOT continue recording after
+            // Finalize current audio container and do NOT continue recording afterward
             rotateRecorder('pause', /* continueAfter */ false);
 
-            // Pause and reset the 5-min progress
+            // Pause progress and reset
             pauseProgress();
             state.progressAccumMs = 0;
             resetProgressFill();
 
-            // Reset the mm:ss timer label
+            // Stop and reset the user-visible timer
+            stopTimer();
             state.timerAccumMs = 0;
             el.timerLabel.text('00:00');
         }
     }
 
-
-
     // ---- Event wiring ---------------------------------------------------------
     function bindEvents() {
-        // Record/Pause toggle
+        // Main Record/Pause FAB
         el.mainBtn.on('click', () => {
-            setRecording(!state.isRecording);
+            // Fire-and-forget async toggling (no need to await)
+            void setRecording(!state.isRecording);
         });
 
-        // Copy
+        // Copy transcript
         el.copyBtn.on('click', copyTranscript);
 
         // Settings
@@ -488,12 +478,12 @@
         el.closeSettingsBtn.on('click', closeSettings);
         el.saveApiKeyBtn.on('click', saveApiKey);
 
-        // Allow ESC to close settings
+        // ESC closes settings sheet
         $(document).on('keydown', (e) => {
             if (e.key === 'Escape') closeSettings();
         });
 
-        // Finalize any remaining audio before the page unloads
+        // On page unload, try to finalize any active recorder
         window.addEventListener('beforeunload', () => {
             try {
                 if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
@@ -508,33 +498,19 @@
         cacheDom();
         bindEvents();
 
-        // Start UI in "recording" as per initial HTML
-        setRecordingUI(true);
+        // Start UI in paused mode. We'll request microphone on first Record tap.
+        setRecordingUI(false);
         resetProgressFill();
-        startProgressCycle();
-        startTimer();
+        el.timerLabel.text('00:00');
 
-        // Initialize microphone + recorder
-        initMic();
-
-        // Expose small API for your speech pipeline
+        // Expose a small API (optional)
         window.App = window.App || {};
         Object.assign(window.App, {
             appendTranscript,   // App.appendTranscript("new words...")
             startTranscribe,    // App.startTranscribe()
             finishTranscribe,   // App.finishTranscribe()
-            setRecording        // App.setRecording(true/false)
+            setRecording        // App.setRecording(true/false) — returns a Promise
         });
-
-        setRecording(false);
-        // Example (remove later): demo new text every 4s while recording
-        // to showcase the 10s color flash.
-        // let demo = setInterval(() => {
-        //     if (!state.isRecording || state.isTranscribing) return;
-        //     appendTranscript('demo input');
-        // }, 4000);
-        // // Stop demo once you wire real input:
-        // window.App.disableDemo = () => { clearInterval(demo); };
     }
 
     $(init);

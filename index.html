@@ -15,8 +15,12 @@
     <title>Pop Art Voice Notes</title>
 
     <!-- TailwindCSS via CDN -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss-browser/4.1.13/index.global.min.js" integrity="sha512-TscjjxDy2iXx5s55Ar78c01JDHUug0K5aw4YKId9Yuocjx3ueX/X9PFyH5XNRVWqagx3TtcQWQVBaHAIPFjiFA==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js" integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g==" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/tailwindcss-browser/4.1.13/index.global.min.js"
+            integrity="sha512-TscjjxDy2iXx5s55Ar78c01JDHUug0K5aw4YKId9Yuocjx3ueX/X9PFyH5XNRVWqagx3TtcQWQVBaHAIPFjiFA=="
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"
+            integrity="sha512-v2CJ7UaYy4JwqLDIrZUI/4hqeoQieOmAZNXBeQyjo21dadnwR+8ZaIJVT8EE2iyI61OV8e6M8PP2/4hpQINQ/g=="
+            crossorigin="anonymous" referrerpolicy="no-referrer"></script>
     <script src="main.js"></script>
     <!-- Pop-artish headline font (optional, purely CSS/HTML phase) -->
     <link rel="preconnect" href="https://fonts.googleapis.com"/>
@@ -74,8 +78,12 @@
             background: radial-gradient(circle, rgba(0, 0, 0, .15), transparent 60%);
             z-index: -1;
         }
+
         /* Keep the icon from shifting when toggling */
-        #mainButton { position: relative; }
+        #mainButton {
+            position: relative;
+        }
+
         #mainButton svg {
             position: absolute;
             left: 50%;
@@ -288,14 +296,15 @@
             <svg id="icon-record" class="h-9 w-9 drop-shadow-sm" viewBox="0 0 24 24" fill="currentColor"
                  aria-hidden="true">
                 <path fill-rule="evenodd"
-                      d="M4.5 7.5a3 3 0 0 1 3-3h9a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3v-9Z"
+                      d="M4.5 5.653c0-1.427 1.529-2.33 2.779-1.643l11.54 6.347c1.295.712 1.295 2.573 0 3.286L7.28 19.99c-1.25.687-2.779-.217-2.779-1.643V5.653Z"
                       clip-rule="evenodd"/>
+
             </svg>
 
 
             <svg id="icon-pause" class="h-9 w-9 hidden" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
                 <path fill-rule="evenodd"
-                      d="M4.5 5.653c0-1.427 1.529-2.33 2.779-1.643l11.54 6.347c1.295.712 1.295 2.573 0 3.286L7.28 19.99c-1.25.687-2.779-.217-2.779-1.643V5.653Z"
+                      d="M4.5 7.5a3 3 0 0 1 3-3h9a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3v-9Z"
                       clip-rule="evenodd"/>
             </svg>
             <span class="sr-only">Recording</span>
