@@ -58,6 +58,7 @@
 
     // ---- Small utilities ------------------------------------------------------
     function fmtMMSS(ms) {
+        // Formats a given time in milliseconds into a MM:SS string representation.
         const t = Math.floor(ms / 1000);
         const m = String(Math.floor(t / 60)).padStart(2, '0');
         const s = String(t % 60).padStart(2, '0');
