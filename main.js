@@ -36,6 +36,7 @@
 
     // ---- DOM cache ------------------------------------------------------------
     const el = {};
+
     function cacheDom() {
         el.mainBtn = $('#mainButton');
         el.iconRecord = $('#icon-record');
@@ -44,6 +45,7 @@
         el.progressContainer = $('#progressContainer');
         el.progressFill = $('#progressFill');
         el.spinnerRow = $('#spinnerRow');
+        el.progressBar = $('#progressBar');
 
         el.settingsBtn = $('#settingsButton');
         el.settingsSheet = $('#settingsSheet');
@@ -234,6 +236,16 @@
         el.settingsSheet.addClass('hidden-important').attr('aria-hidden', 'true');
     }
 
+    function applyProgressAnimationDuration() {
+        // Reflect the runtime setting into the CSS animation duration.
+        try {
+            if (el.progressBar && el.progressBar.length) {
+                el.progressBar[0].style.setProperty('--progress-duration', PROGRESS_DURATION_MS + 'ms');
+            }
+        } catch (_) {
+        }
+    }
+
     function saveApiKey() {
         const val = (el.apiKeyInput.val() || '').trim();
         try {
@@ -246,6 +258,7 @@
                 localStorage.setItem(LS_RUNTIME_KEY, toStore);
                 // Apply immediately to the in-memory duration
                 PROGRESS_DURATION_MS = parseInt(toStore, 10) || 30000;
+                applyProgressAnimationDuration();
             }
             announce('Settings saved to local storage.');
             closeSettings();
@@ -264,7 +277,7 @@
             if (navigator.clipboard && window.isSecureContext) {
                 await navigator.clipboard.writeText(text);
             } else {
-                const ta = $('<textarea>').val(text).appendTo('body').css({ position: 'fixed', top: '-1000px' });
+                const ta = $('<textarea>').val(text).appendTo('body').css({position: 'fixed', top: '-1000px'});
                 ta[0].select();
                 document.execCommand('copy');
                 ta.remove();
@@ -300,7 +313,7 @@
             return;
         }
         try {
-            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            const stream = await navigator.mediaDevices.getUserMedia({audio: true});
             state.mediaStream = stream;
             startRecorder(stream);
             announce('Microphone ready. Recording started.');
@@ -313,7 +326,7 @@
     function startRecorder(stream) {
         // Starts a MediaRecorder with small time slices so dataavailable fires regularly.
         const mimeType = getSupportedMimeType();
-        const mr = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+        const mr = new MediaRecorder(stream, mimeType ? {mimeType} : undefined);
         state.mediaRecorder = mr;
         state.chunkParts = [];
         state.chunkStartTs = performance.now();
@@ -329,14 +342,14 @@
             try {
                 if (state.chunkParts.length > 0) {
                     const type = mr.mimeType || 'audio/webm';
-                    const blob = new Blob(state.chunkParts, { type });
+                    const blob = new Blob(state.chunkParts, {type});
                     const ts = new Date().toISOString().replace(/[:.]/g, '-');
                     const ext =
                         type.includes('webm') ? 'webm' :
-                            type.includes('ogg')  ? 'ogg'  :
-                                type.includes('mp4')  ? 'm4a'  : 'webm';
+                            type.includes('ogg') ? 'ogg' :
+                                type.includes('mp4') ? 'm4a' : 'webm';
                     const fileName = `voice-${ts}.${ext}`;
-                    const file = new File([blob], fileName, { type, lastModified: Date.now() });
+                    const file = new File([blob], fileName, {type, lastModified: Date.now()});
 
                     // Reset for next session
                     state.chunkParts = [];
@@ -368,10 +381,13 @@
                     // Slight delay avoids InvalidStateError on some browsers
                     setTimeout(() => startRecorder(stream), 1);
                 }
-            }, { once: true });
+            }, {once: true});
 
             // Request the last buffered data chunk before stopping
-            try { state.mediaRecorder.requestData(); } catch (_) {}
+            try {
+                state.mediaRecorder.requestData();
+            } catch (_) {
+            }
             state.mediaRecorder.stop();
         } catch (e) {
             console.warn('rotateRecorder failed:', e);
@@ -456,7 +472,11 @@
             } else if (!state.mediaRecorder || state.mediaRecorder.state === 'inactive') {
                 startRecorder(state.mediaStream);
             } else if (state.mediaRecorder.state === 'paused') {
-                try { state.mediaRecorder.resume(); } catch (e) { console.warn('Resume failed:', e); }
+                try {
+                    state.mediaRecorder.resume();
+                } catch (e) {
+                    console.warn('Resume failed:', e);
+                }
             }
 
             // Start/resume UI cycles
@@ -508,7 +528,8 @@
                 if (state.mediaRecorder && state.mediaRecorder.state !== 'inactive') {
                     state.mediaRecorder.stop();
                 }
-            } catch (_) {}
+            } catch (_) {
+            }
         });
     }
 
@@ -526,7 +547,11 @@
                     PROGRESS_DURATION_MS = ms;
                 }
             }
-        } catch (_) {}
+        } catch (_) {
+        }
+
+        // Ensure the CSS animation duration matches the runtime setting
+        applyProgressAnimationDuration();
 
         // Start UI in paused mode. We'll request microphone on first Record tap.
         setRecordingUI(false);

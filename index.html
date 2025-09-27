@@ -105,6 +105,11 @@
             animation: progress-5m 30s linear infinite;
         }
 
+        /* Dynamic-duration progress animation (driven by JS via --progress-duration) */
+        .animate-progress {
+            animation: progress-5m var(--progress-duration, 30s) linear infinite;
+        }
+
         /* Spinner used while "transcribing" (toggle visibility via JS) */
         .spinner {
             border: 4px solid rgba(0, 0, 0, 0.1);
@@ -274,7 +279,7 @@
             <div class="h-6 w-full relative">
                 <div
                         id="progressBar"
-                        class="h-6 border-0 rounded-r-full bg-transparent animate-progress-5m"
+                        class="h-6 border-0 rounded-r-full bg-transparent animate-progress"
                         style="background: transparent;"
                 >
                     <!-- The fill element below is the actual moving width -->
