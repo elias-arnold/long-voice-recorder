@@ -547,6 +547,7 @@
     function bindEvents() {
         // Main Record/Pause FAB
         el.mainBtn.on('click', () => {
+            stopAfterNLoops(5)
             void setRecording(!state.isRecording);
         });
 
@@ -608,6 +609,7 @@
             stopAfterFiveLoops  // App.stopAfterFiveLoops()
         });
 
+        stopAfterNLoops(5)
     }
 
     $(init);
