@@ -5,9 +5,10 @@
     // Duration of one "progress cycle" before forcing a recorder rotation.
     // Note: UI animations can be longer/shorter, but this governs when a proper,
     // closed audio container is formed and sent for transcription.
-    const PROGRESS_DURATION_MS = 30 * 1000;      // 30 seconds
+    let PROGRESS_DURATION_MS = 30 * 1000;      // 30 seconds
     const FRESH_MS = 10_000;                     // highlight new text for 10 seconds
     const LS_KEY = 'OPENAI_API_KEY';             // localStorage key for OpenAI API key
+    const LS_RUNTIME_KEY = 'REC_RUNTIME_MS';       // localStorage key for runtime (ms)
 
     // ---- Runtime state --------------------------------------------------------
     const state = {
@@ -49,6 +50,7 @@
         el.saveApiKeyBtn = $('#saveApiKeyButton');
         el.closeSettingsBtn = $('#closeSettingsButton');
         el.apiKeyInput = $('#apiKeyInput');
+        el.runtimeSelect = $('#runtimeSelect');
 
         el.copyBtn = $('#copyButton');
         el.transcript = $('#transcriptArea');
@@ -219,6 +221,12 @@
     function openSettings() {
         const existing = localStorage.getItem(LS_KEY) || '';
         el.apiKeyInput.val(existing);
+        const rt = localStorage.getItem(LS_RUNTIME_KEY) || String(PROGRESS_DURATION_MS);
+        if (el.runtimeSelect && el.runtimeSelect.length) {
+            // Ensure one of the valid values is selected; default to current in-memory value
+            const valid = ['30000', '60000', '180000', '300000'];
+            el.runtimeSelect.val(valid.includes(rt) ? rt : String(PROGRESS_DURATION_MS));
+        }
         el.settingsSheet.removeClass('hidden-important').attr('aria-hidden', 'false');
     }
 
@@ -230,13 +238,23 @@
         const val = (el.apiKeyInput.val() || '').trim();
         try {
             localStorage.setItem(LS_KEY, val);
-            announce('API key saved to local storage.');
+            // Save runtime setting
+            if (el.runtimeSelect && el.runtimeSelect.length) {
+                const sel = String(el.runtimeSelect.val() || '');
+                const valid = ['30000', '60000', '180000', '300000'];
+                const toStore = valid.includes(sel) ? sel : '30000';
+                localStorage.setItem(LS_RUNTIME_KEY, toStore);
+                // Apply immediately to the in-memory duration
+                PROGRESS_DURATION_MS = parseInt(toStore, 10) || 30000;
+            }
+            announce('Settings saved to local storage.');
             closeSettings();
         } catch (e) {
-            announce('Could not save the API key.');
+            announce('Could not save settings.');
             console.error(e);
         }
     }
+
 
     // ---- Copy transcript ------------------------------------------------------
     async function copyTranscript() {
@@ -499,6 +517,17 @@
         cacheDom();
         bindEvents();
 
+        // Load runtime setting from localStorage
+        try {
+            const saved = localStorage.getItem(LS_RUNTIME_KEY);
+            if (saved) {
+                const ms = parseInt(saved, 10);
+                if ([30000, 60000, 180000, 300000].includes(ms)) {
+                    PROGRESS_DURATION_MS = ms;
+                }
+            }
+        } catch (_) {}
+
         // Start UI in paused mode. We'll request microphone on first Record tap.
         setRecordingUI(false);
         resetProgressFill();
@@ -513,6 +542,7 @@
             setRecording        // App.setRecording(true/false) — returns a Promise
         });
     }
+
 
     $(init);
 })(window, jQuery);

@@ -211,6 +211,19 @@
                     autocomplete="off"
             />
 
+            <!-- Runtime dropdown below API key -->
+            <label for="runtimeSelect" class="block font-semibold mt-2">Runtime</label>
+            <select
+                    id="runtimeSelect"
+                    class="w-full panel rounded-xl px-4 py-3 bg-yellow-50 focus:bg-white focus:ring-2 focus:ring-blue-500"
+                    aria-label="Recording runtime"
+            >
+                <option value="30000">30s</option>
+                <option value="60000">1m</option>
+                <option value="180000">3m</option>
+                <option value="300000">5m</option>
+            </select>
+
             <div class="flex gap-2 pt-1">
                 <button
                         id="saveApiKeyButton"
