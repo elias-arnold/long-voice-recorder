@@ -264,6 +264,15 @@
 
 <!-- Main content: Editable transcript panel -->
 <main class="flex-1 px-4 content-safe-pad pt-4 md:px-6">
+    <div role="status" aria-live="polite"
+         class="z-50 my-10 pointer-events-none select-none
+            rounded-xl border-4 border-black bg-yellow-300
+            shadow-[0_4px_0_0_#000,0_8px_0_0_rgba(0,0,0,0.5)]
+            px-4 py-2 transform -skew-x-3 -rotate-1">
+        <h2 class="font-pop font-black text-black text-2xl md:text-3xl leading-tight tracking-wide">
+            It will stop after <span class="text-rose-600">5 loops</span>!
+        </h2>
+    </div>
     <div
             id="transcriptPanel"
             class="panel rounded-3xl bg-white/90"
